@@ -57,3 +57,6 @@ def load_tf_bert_weights_to_torch(model, ckpt_path):
         print("Initialize PyTorch weight {}".format(name))
         pointer.data = torch.from_numpy(array)
     return model
+
+def cached_path(url_or_filename, cache_dir=None):
+    pass
