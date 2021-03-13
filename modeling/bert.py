@@ -26,8 +26,11 @@ import logging
 import tarfile
 import tempfile
 
+import numpy as np
+
 import torch
 import torch.nn as nn
+from torchvision import transforms
 
 from TorchCRF import CRF
 
@@ -252,7 +255,7 @@ class BertAttention(nn.Module):
 
     def forward(self, query_hidden_states, context_hidden_states=None, attention_mask=None):
         attention_output = self.self_attention(query_hidden_states, context_hidden_states, attention_mask)
-        self_output = self.self_attention(query_hidden_states, attention_output)
+        self_output = self.self_output(query_hidden_states, attention_output)
         return self_output
 
 class BertIntermediate(nn.Module):
@@ -499,7 +502,7 @@ class BertModel(BertPreTrainedModel):
         self.encoder = BertEncoder(config)
         self.apply(self.init_bert_weights)
 
-    def forward(self, input_ids, token_type_ids=None, attention_mask=None, return_cls=True):
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None, return_cls=False):
         if token_type_ids is None:
             token_type_ids = torch.zeros_like(input_ids)
         if attention_mask is None:
@@ -509,7 +512,7 @@ class BertModel(BertPreTrainedModel):
         attention_mask_extended = (1.0-attention_mask_extended) * (-10000.0)
 
         embedding_output = self.embeddings(input_ids, token_type_ids)
-        encoder_output = self.encoder(embedding_output, attention_mask=attention_mask_extended)
+        encoder_output = self.encoder(embedding_output, context_hidden_states=None, attention_mask=attention_mask_extended)
         if return_cls:
             return encoder_output[:, 0]
         else:
@@ -520,7 +523,7 @@ class MTCCMBertForMMTokenClassificationCRF(BertPreTrainedModel):
         Cross-Modal Attention BERT model for token-level classification
     """
     def __init__(self, config, num_labels=2, num_aux_labels=2, visual_dim=2048):
-        super(MTCCMBertForMMTokenClassificationCRF, self).__init__()
+        super(MTCCMBertForMMTokenClassificationCRF, self).__init__(config)
         self.num_labels=num_labels
         self.bert = BertModel(config)
         self.self_encoder = BertEncoder(config)
@@ -545,11 +548,11 @@ class MTCCMBertForMMTokenClassificationCRF(BertPreTrainedModel):
         attention_mask_extended = attention_mask.unsqueeze(1).unsqueeze(2)
         attention_mask_extended = attention_mask_extended.to(dtype=next(self.parameters()).dtype)
         attention_mask_extended = (1.0 - attention_mask_extended) * -10000.0
-        aux_self_attention_output = self.self_encoder(bert_output_dropout, attention_mask_extended)
+        aux_self_attention_output = self.self_encoder(bert_output_dropout, attention_mask=attention_mask_extended)
         aux_bert_logits = self.aux_classifier(aux_self_attention_output)
         trans_bert_feats = torch.matmul(aux_bert_logits, trans_matrix.float())
 
-        main_addon_encoder_output = self.self_encoder2(bert_output_dropout, attention_mask_extended)
+        main_addon_encoder_output = self.self_encoder2(bert_output_dropout, attention_mask=attention_mask_extended)
         vis_embed_map = visual_embeds_att.view(-1, 2048, 49).permute(0, 2, 1)
         converted_vis_embed_map = self.vis2text_linear(vis_embed_map)
 
@@ -579,10 +582,38 @@ class MTCCMBertForMMTokenClassificationCRF(BertPreTrainedModel):
 
 
 if __name__ == '__main__':
-    config = BertConfig(
-        100
-    )
-    bert = BertModel(config)
-    input_ids = torch.ones(1, 3, dtype=torch.long)
-    bert_output = bert(input_ids)
-    print(bert_output)
+    # config = BertConfig(
+    #     100
+    # )
+    # bert = BertModel(config)
+    # input_ids = torch.ones(1, 3, dtype=torch.long)
+    # bert_output = bert(input_ids)
+    # print(bert_output)
+    from resnet import resnet152
+    from resnet import myResnet
+    from utils import image_process
+    from torchvision import transforms
+
+    net = resnet152()
+    # net.load_state_dict(torch.load(os.path.join(args.resnet_root, 'resnet152.pth')))
+    img_encoder = myResnet(net)
+
+    transform = transforms.Compose([
+        transforms.RandomCrop(224),  # args.crop_size, by default it is set to be 224
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize((0.485, 0.456, 0.406),
+                                (0.229, 0.224, 0.225))])
+
+    test_img_path = '/Users/caijinchao/Desktop/IMG_3548.PNG'
+    img_feat = image_process(test_img_path, transform)
+    imgs_f, img_mean, img_att = img_encoder(torch.stack([img_feat]))
+
+    bert_config = BertConfig(100)
+    mner_model = MTCCMBertForMMTokenClassificationCRF(bert_config)
+    input_ids = torch.tensor([[1,3,5,7,9,11] + [0] * 43], dtype=torch.long)
+    segment_ids = torch.tensor([[1,1,1,1,1,1] + [0] * 43], dtype=torch.long)
+    attention_mask = torch.tensor([[1,1,1,1,1,1] + [0] * 43], dtype=torch.long)
+    added_attention_mask = torch.tensor([[1]*55], dtype=torch.long)
+    trans_matrix = torch.tensor(np.zeros((2, 2), dtype=float))
+    pred_tags = mner_model(input_ids, segment_ids, attention_mask, added_attention_mask, img_att, trans_matrix)

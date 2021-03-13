@@ -1,3 +1,5 @@
+from PIL import Image
+
 def load_tf_bert_weights_to_torch(model, ckpt_path):
     try:
         import re
@@ -60,3 +62,15 @@ def load_tf_bert_weights_to_torch(model, ckpt_path):
 
 def cached_path(url_or_filename, cache_dir=None):
     pass
+
+# transform = transforms.Compose([
+#     transforms.RandomCrop(224),  # args.crop_size, by default it is set to be 224
+#     transforms.RandomHorizontalFlip(),
+#     transforms.ToTensor(),
+#     transforms.Normalize((0.485, 0.456, 0.406),
+#                             (0.229, 0.224, 0.225))])
+
+def image_process(image_path, transform):
+    image = Image.open(image_path).convert('RGB')
+    image = transform(image)
+    return image
